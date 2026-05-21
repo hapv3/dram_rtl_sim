@@ -45,7 +45,7 @@ From the root folder of this repository, use the command `make all` or `make gui
     ```shell
     -sv_lib <library folder path>/libsystemc -sv_lib <library folder path>/libDRAMSys_Simulator +DRAMSYS_RES=<path to dramsys_lib/resources>
     ```
-
+   For simulation in vcs, Please refer Makefile with *_vcs option for more information. 
 5. 💡 Now, you are ready to enjoy your DRAM simulation!
 
 ## 🎉 License

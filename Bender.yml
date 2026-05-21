@@ -9,7 +9,8 @@ package:
 
 
 dependencies:
-  axi:                 { git: "https://github.com/pulp-platform/axi.git",                 version: 0.39.1 } #0.38.0
+  axi:                 { git: "https://github.com/pulp-platform/axi.git",                 version: 0.39.0 } #0.38.0
+  common_verification: { git: "https://github.com/pulp-platform/common_verification.git", version: 0.2.5  }
 
 sources:
   #level 1 

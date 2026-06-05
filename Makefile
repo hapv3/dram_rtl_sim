@@ -8,6 +8,7 @@ BENDER ?= bender
 VLOG_ARGS = -svinputport=compat -override_timescale 1ns/1ps -suppress 2583 -suppress 13314
 library ?= work
 top_level ?= axi_to_dram_tb
+top_level_v2 ?= axi_to_dram_v2_tb
 
 DRAM_RTL_SIM_ROOT = $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 
@@ -46,6 +47,49 @@ all_vcs: compile_vcs
 	export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(dramsys_lib_path)
 	cd vcs && ./simv $(run_vcs_args)
 
+# =========================================================
+# Verilator arguments
+# =========================================================
+verilator_args ?=
+verilator_args += -sv --timing
+verilator_args += --cc --exe --build
+verilator_args += -Wno-fatal -Wno-lint -Wno-style -Wno-SYMRSVDWORD -Wno-IGNOREDRETURN
+verilator_args += -LDFLAGS "$(dramsys_lib_path)/sc_main_dummy.o"
+verilator_args += -LDFLAGS "-Wl,-rpath,$(dramsys_lib_path)"
+verilator_args += -LDFLAGS "-L$(dramsys_lib_path)"
+verilator_args += -LDFLAGS "-lDRAMSys_Simulator"
+verilator_args += -LDFLAGS "-lsystemc"
+
+run_verilator_args += +DRAMSYS_RES=$(dramsys_resouces_path)
+
+all_verilator: compile_verilator
+	export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(dramsys_lib_path)
+	./verilator/V$(top_level) $(run_verilator_args)
+
+compile_verilator: sc_main_dummy verilator/filelist.f
+	verilator \
+		-f verilator/filelist.f \
+		--top-module $(top_level) \
+		--Mdir verilator \
+		-CFLAGS "-DTOP_MODULE=V$(top_level)" \
+		$(verilator_args) test/tb.cpp
+
+all_verilator_v2: compile_verilator_v2
+	export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:$(dramsys_lib_path)
+	./verilator/V$(top_level_v2) $(run_verilator_args)
+
+compile_verilator_v2: sc_main_dummy verilator/filelist.f
+	verilator \
+		-f verilator/filelist.f \
+		--top-module $(top_level_v2) \
+		--Mdir verilator \
+		-CFLAGS "-DTOP_MODULE=V$(top_level_v2)" \
+		$(verilator_args) test/tb.cpp
+
+verilator/filelist.f: Bender.yml Makefile $(shell find src -type f) $(shell find test -type f)
+	mkdir -p verilator
+	$(BENDER) script flist-plus -t test -t rtl -t simulation -t verilator -t tech_cells_generic_exclude_deprecated > $@
+
 compile_vcs: sc_main_dummy vcs/filelist.f
 	cd vcs && vcs \
 		-f filelist.f \
@@ -54,7 +98,7 @@ compile_vcs: sc_main_dummy vcs/filelist.f
 		$(vcs_args)
 
 sc_main_dummy:
-	g++ -c ./$(dramsys_lib_path)/dummy_sc_main.cpp -I$(dramsys_lib_path)/DRAMSys/external/systemc/include -o ./$(dramsys_lib_path)/dummy_sc_main.o -std=c++17
+	g++ -c ./dramsys_lib/sc_main_dummy.cpp -I./dramsys_lib/DRAMSys/build/_deps/systemc-src/src -o $(dramsys_lib_path)/sc_main_dummy.o -std=c++17
 
 vcs/filelist.f: Bender.yml Makefile $(shell find src -type f) $(shell find test -type f)
 	mkdir -p vcs
@@ -75,3 +119,5 @@ vsim/compile.tcl: Bender.yml Makefile $(shell find src -type f) $(shell find tes
 
 clean:
 	cd vsim && rm -rf work/ vsim*  transcript  modelsim.ini compile.tcl .nfs* DRAM*
+	rm -rf vcs/
+	rm -rf verilator/

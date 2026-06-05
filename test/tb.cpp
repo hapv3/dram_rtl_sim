@@ -31,24 +31,12 @@ int main(int argc, char** argv) {
     
     TOP_MODULE* top = new TOP_MODULE{contextp};
 
-    top->clk = 0;
-    top->rst_n = 0;
-
-    // Wait 3 cycles (6 edges)
-    for (int i = 0; i < 6; i++) {
-        top->clk = !top->clk;
-        top->eval();
-        contextp->timeInc(2); // Assuming 2ns per half-cycle
-    }
-    top->rst_n = 1;
-
     // Main event loop
     while (!contextp->gotFinish()) {
-        top->clk = !top->clk;
         top->eval();
-        contextp->timeInc(2);
+        contextp->timeInc(1);
 
-        if (contextp->time() > 2000000) {
+        if (contextp->time() > 2000000000) {
             std::cout << "Simulation Timeout!" << std::endl;
             break;
         }

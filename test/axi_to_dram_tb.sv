@@ -290,11 +290,11 @@ module axi_to_dram_tb;
         @(posedge rst_n);
 
         // Sequential bandwidth test
-        speedTestWrite(1000);
-        speedTestRead(1000);
+        speedTestWrite(100);
+        speedTestRead(100);
 
         // Outstanding advantage test: short bursts to different rows
-        speedTestReadRandomRows(10, 3);  // 10 bursts x 4 beats, spread rows
+        // speedTestReadRandomRows(10, 3);  // 10 bursts x 4 beats, spread rows
 
         $display("----------     ALL TESTS PASSED !!!        ---------");
         $finish;

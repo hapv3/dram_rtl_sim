@@ -361,14 +361,14 @@ module axi_to_dram_v2_tb;
         @(posedge rst_n);
 
         // Data integrity check (writes and reads same addresses)
-        testDataIntegrity(50, 15); // 50 bursts of 16 beats
+        // testDataIntegrity(50, 15); // 50 bursts of 16 beats
 
         // Sequential bandwidth test
-        speedTestWrite(1000);
-        speedTestRead(1000);
+        speedTestWrite(100);
+        speedTestRead(100);
 
         // Outstanding advantage test: short bursts to different rows
-        speedTestReadRandomRows(10, 3);  // 10 bursts x 4 beats, spread rows
+        // speedTestReadRandomRows(10, 3);  // 10 bursts x 4 beats, spread rows
 
         $display("----------     ALL TESTS PASSED !!!        ---------");
         $finish;

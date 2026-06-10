@@ -33,7 +33,8 @@ int main(int argc, char** argv) {
 
     // Main event loop
     while (!contextp->gotFinish()) {
-        if (top->eventsPending()) {
+	// instead of increase time 1ps, jump to next timeslot for performance
+	if (top->eventsPending()) {
             contextp->time(top->nextTimeSlot());
         }
         top->eval();

@@ -33,10 +33,12 @@ int main(int argc, char** argv) {
 
     // Main event loop
     while (!contextp->gotFinish()) {
+        if (top->eventsPending()) {
+            contextp->time(top->nextTimeSlot());
+        }
         top->eval();
-        contextp->timeInc(1);
 
-        if (contextp->time() > 2000000000) {
+        if (contextp->time() > 200000000000ULL) {
             std::cout << "Simulation Timeout!" << std::endl;
             break;
         }

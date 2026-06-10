@@ -12,7 +12,7 @@
 // Testbench for dram rtl simulator
 `timescale 1ns/1ps
 
-module axi_to_dram_tb;
+module axi_to_dram_v2_tb;
 
     `include "axi/assign.svh"
     `include "axi/typedef.svh"
@@ -86,7 +86,7 @@ module axi_to_dram_tb;
 
     dram_sim_engine #(.ClkPeriod(ClkPeriod)) i_dram_sim_engine (.clk_i(clk), .rst_ni(rst_n));
 
-    axi_dram_sim #(
+    axi_dram_sim_v2 #(
         .AxiAddrWidth(AXI_ADDR_WIDTH),
         .AxiDataWidth(AXI_DATA_WIDTH),
         .AxiIdWidth  (AXI_ID_WIDTH),
@@ -101,7 +101,7 @@ module axi_to_dram_tb;
         .axi_aw_t    (axi_aw_chan_t),
         .axi_w_t     (axi_w_chan_t),
         .axi_b_t     (axi_b_chan_t)
-    ) i_axi_dram_sim (
+    ) i_axi_dram_sim_v2 (
         .clk_i     (clk     ),
         .rst_ni    (rst_n    ),
         .axi_req_i (axi_req ),
@@ -118,8 +118,8 @@ module axi_to_dram_tb;
         .DW ( AXI_DATA_WIDTH ),
         .IW ( AXI_ID_WIDTH ),
         .UW ( AXI_USER_WIDTH ),
-        .MAX_READ_TXNS(1),
-        .MAX_WRITE_TXNS(1),
+        .MAX_READ_TXNS(16),
+        .MAX_WRITE_TXNS(16),
         .AX_MAX_WAIT_CYCLES(20),
         .AXI_BURST_FIXED(0),
         // Stimuli application and test time
@@ -150,7 +150,7 @@ module axi_to_dram_tb;
         automatic axi_master_t::r_beat_t r = new ;
 
         ar = axi_master.new_rand_burst(0,0);
-        ar.ax_len = 255;
+        ar.ax_len = 15;
         ar.ax_size = $clog2(AXI_DATA_WIDTH/8);
         ar.ax_atop = axi_pkg::ATOP_NONE;
         ar.ax_addr = (ar.ax_addr>>$clog2(AXI_DATA_WIDTH/8))<<$clog2(AXI_DATA_WIDTH/8);
@@ -168,8 +168,10 @@ module axi_to_dram_tb;
             end
             //receive r
             begin
-                for (int i = 0; i < (count*(ar.ax_len+1)); i++) begin
-                    axi_master.drv.recv_r(r);
+                for (int i = 0; i < count; i++) begin
+                    for (int j = 0; j <= ar.ax_len; j++) begin
+                        axi_master.drv.recv_r(r);
+                    end
                 end
             end
         join
@@ -189,7 +191,7 @@ module axi_to_dram_tb;
         automatic axi_master_t::b_beat_t b = new ;
 
         aw = axi_master.new_rand_burst(0,0);
-        aw.ax_len = 255;
+        aw.ax_len = 15;
         aw.ax_size = $clog2(AXI_DATA_WIDTH/8);
         aw.ax_atop = axi_pkg::ATOP_NONE;
         aw.ax_addr = (aw.ax_addr>>$clog2(AXI_DATA_WIDTH/8))<<$clog2(AXI_DATA_WIDTH/8);
@@ -209,11 +211,12 @@ module axi_to_dram_tb;
             //send w
             begin
                 for (int i = 0; i < count; i++) begin
-                    for (int j = 0; j < 256; j++) begin
-                        w.randomize();
+                    for (int j = 0; j <= aw.ax_len; j++) begin
+                        //w.randomize();
+                        for(int k=0; k<512/32; k++) w.w_data[k*32 +: 32] = $urandom;
                         w.w_strb = {64{1'b1}};
                         w.w_last = 0;
-                        if (j == 255) begin
+                        if (j == aw.ax_len) begin
                             w.w_last = 1;
                         end
                         axi_master.drv.send_w(w);
@@ -236,7 +239,8 @@ module axi_to_dram_tb;
     endtask
 
     // Test outstanding reads: send short bursts to different DRAM rows
-    // V1 serializes via axi_to_axi_lite, so pipelining has no effect.
+    // This demonstrates V2's pipelining advantage: multiple AR requests
+    // can be in-flight simultaneously, hiding DRAM row activation latency.
     task speedTestReadRandomRows(int count, int burst_len);
         real time_start;
         real time_end;
@@ -249,6 +253,7 @@ module axi_to_dram_tb;
         ar.ax_len = burst_len;
         ar.ax_size = $clog2(AXI_DATA_WIDTH/8);
         ar.ax_atop = axi_pkg::ATOP_NONE;
+        // Start from BASE-aligned address
         ar.ax_addr = BASE;
 
         total_bytes = real'(64) * real'(burst_len + 1) * real'(count);
@@ -257,7 +262,7 @@ module axi_to_dram_tb;
         time_start = $time();
 
         fork
-            //send ar — same pattern as V2
+            //send ar — all bursts pipelined, addresses 8KB apart (different rows)
             begin
                 for (int i = 0; i < count; i++) begin
                     ar.ax_addr = BASE + (i * 32'h2000); // 8KB stride → different DRAM rows
@@ -282,12 +287,81 @@ module axi_to_dram_tb;
                  count, bandwidth, time_end - time_start);
     endtask
 
+    // Data Integrity Test: Write to specific addresses, then read back
+    // The axi_scoreboard will automatically verify that read data matches written data.
+    task testDataIntegrity(int count, int burst_len);
+        automatic axi_master_t::ax_beat_t aw = new;
+        automatic axi_master_t::w_beat_t w = new;
+        automatic axi_master_t::b_beat_t b = new;
+        automatic axi_master_t::ax_beat_t ar = new;
+        automatic axi_master_t::r_beat_t r = new;
+
+        $display("---------- Data Integrity Test: %0d bursts x %0d beats ---------", count, burst_len+1);
+
+        // 1. Write Data
+        aw = axi_master.new_rand_burst(0,0);
+        aw.ax_len = burst_len;
+        aw.ax_size = $clog2(AXI_DATA_WIDTH/8);
+        aw.ax_atop = axi_pkg::ATOP_NONE;
+
+        fork
+            begin
+                for (int i = 0; i < count; i++) begin
+                    aw.ax_addr = BASE + (i * 64 * (burst_len + 1));
+                    axi_master.drv.send_aw(aw);
+                end
+            end
+            begin
+                for (int i = 0; i < count; i++) begin
+                    for (int j = 0; j <= burst_len; j++) begin
+                        for(int k=0; k<512/32; k++) w.w_data[k*32 +: 32] = $urandom;
+                        w.w_strb = {64{1'b1}};
+                        w.w_last = (j == burst_len) ? 1 : 0;
+                        axi_master.drv.send_w(w);
+                    end
+                end
+            end
+            begin
+                for (int i = 0; i < count; i++) begin
+                    axi_master.drv.recv_b(b);
+                end
+            end
+        join
+
+        // 2. Read Data Back
+        ar = axi_master.new_rand_burst(0,0);
+        ar.ax_len = burst_len;
+        ar.ax_size = $clog2(AXI_DATA_WIDTH/8);
+        ar.ax_atop = axi_pkg::ATOP_NONE;
+
+        fork
+            begin
+                for (int i = 0; i < count; i++) begin
+                    ar.ax_addr = BASE + (i * 64 * (burst_len + 1));
+                    axi_master.drv.send_ar(ar);
+                end
+            end
+            begin
+                for (int i = 0; i < count; i++) begin
+                    for (int j = 0; j <= burst_len; j++) begin
+                        axi_master.drv.recv_r(r);
+                    end
+                end
+            end
+        join
+
+        $display("Data Integrity Test done!: Scoreboard verified all read data successfully.");
+    endtask
+
     initial begin
         axi_master.reset();
         axi_scoreboard_master.enable_all_checks();
         axi_scoreboard_master.monitor();
-        axi_master.add_memory_region(BASE + 0, BASE + 32'h0100_0000, axi_pkg::NORMAL_NONCACHEABLE_NONBUFFERABLE);
+        axi_master.add_memory_region(BASE + 0, BASE + 32'h0010_0000, axi_pkg::NORMAL_NONCACHEABLE_NONBUFFERABLE);
         @(posedge rst_n);
+
+        // Data integrity check (writes and reads same addresses)
+        testDataIntegrity(50, 15); // 50 bursts of 16 beats
 
         // Sequential bandwidth test
         speedTestWrite(1000);
@@ -305,4 +379,4 @@ module axi_to_dram_tb;
 
 
 
-endmodule : axi_to_dram_tb
+endmodule : axi_to_dram_v2_tb

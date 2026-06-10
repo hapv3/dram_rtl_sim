@@ -16,7 +16,7 @@ dramsys: $(DRAMSYS_BUILD_DIR)/lib/libsystemc.so
 $(DRAMSYS_ROOT)/.patched:
 	rm -rf $(DRAMSYS_ROOT)
 	git clone https://github.com/tukl-msd/DRAMSys.git $(DRAMSYS_ROOT)
-	cd $(DRAMSYS_ROOT) && git reset --hard 8e021ea && git apply $(DRAM_RTL_SIM_ROOT)/dramsys_lib/dramsys_lib_patch
+	cd $(DRAMSYS_ROOT) && git reset --hard 8e021ea && git apply $(DRAM_RTL_SIM_ROOT)/dramsys_lib/dramsys_v2.patch
 	@touch $@
 
 # Build DRAMSys

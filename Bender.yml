@@ -17,10 +17,13 @@ sources:
   - target: any(simulation, verilator)
     files:
       - src/sim_dram.sv
+      - src/sim_dram_v2.sv
       - src/axi_dram_sim.sv
+      - src/axi_dram_sim_v2.sv
       - src/dram_sim_engine.sv
 
   - target: test
     files:
       - test/axi_to_dram_tb.sv
+      - test/axi_to_dram_v2_tb.sv
       - test/axi_to_multi_dram_tb.sv

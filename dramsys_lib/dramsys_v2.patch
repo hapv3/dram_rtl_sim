@@ -1,8 +1,18 @@
+diff --git a/.patched b/.patched
+new file mode 100644
+index 0000000..e69de29
 diff --git a/configs/simconfig/example.json b/configs/simconfig/example.json
-index 6b65d7d..f64c3c5 100644
+index 6b65d7d..20f0b01 100644
 --- a/configs/simconfig/example.json
 +++ b/configs/simconfig/example.json
-@@ -8,7 +8,7 @@
+@@ -2,13 +2,13 @@
+     "simconfig": {
+         "AddressOffset": 0,
+         "CheckTLM2Protocol": false,
+-        "DatabaseRecording": true,
++        "DatabaseRecording": false,
+         "Debug": false,
+         "EnableWindowing": false,
          "PowerAnalysis": false,
          "SimulationName": "example",
          "SimulationProgressBar": true,
@@ -114,7 +124,7 @@ index d800406..716432f 100644
  
      void serialize(std::ostream& stream) const override;
 diff --git a/src/simulator/CMakeLists.txt b/src/simulator/CMakeLists.txt
-index a485bbd..8891e4e 100644
+index a485bbd..0738356 100644
 --- a/src/simulator/CMakeLists.txt
 +++ b/src/simulator/CMakeLists.txt
 @@ -1,67 +1,30 @@
@@ -179,19 +189,18 @@ index a485bbd..8891e4e 100644
      PUBLIC
          Threads::Threads
          DRAMSys::libdramsys
-+    PRIVATE
-+        stdc++fs
- )
-
+-)
+-
 -add_executable(DRAMSys
 -    main.cpp
 -)
 -
 -target_link_libraries(DRAMSys
--    PRIVATE
+     PRIVATE
 -        DRAMSys_Simulator
--)
--
++        stdc++fs
+ )
+ 
 +# Source group for better organization in IDEs
  build_source_group()
 diff --git a/src/simulator/simulator/MemoryManager.cpp b/src/simulator/simulator/MemoryManager.cpp
@@ -231,10 +240,10 @@ index 35f2ddf..3cff9dd 100644
  #include <DRAMSys/simulation/DRAMSysRecordable.h>
 diff --git a/src/simulator/simulator/dramsys_conv.h b/src/simulator/simulator/dramsys_conv.h
 new file mode 100644
-index 0000000..925b420
+index 0000000..4f9f037
 --- /dev/null
 +++ b/src/simulator/simulator/dramsys_conv.h
-@@ -0,0 +1,376 @@
+@@ -0,0 +1,356 @@
 +#pragma once
 +
 +#include "simulator/MemoryManager.h"
@@ -279,15 +288,31 @@ index 0000000..925b420
 +        uint64_t                                      addr;
 +        uint32_t                                      len;
 +        int                                           is_write;
++        int                                           axi_id;
++    };
++
++    struct read_rsp_t
++    {
++        int                                           axi_id;
++        std::vector<uint8_t>                          data;
++        size_t                                        offset;
++    };
++
++    struct write_rsp_t
++    {
++        int                                           axi_id;
 +    };
 +
 +    std::list<req_t>                                  all_req_list;
 +    std::list<req_t>                                  read_req_list;
-+    std::list<std::pair<req_t, std::queue<uint8_t>>>  out_order_rsp_list;
 +    std::list<req_t>                                  write_req_list;
-+    std::deque<uint8_t>                               read_rsp_queue;
-+    std::queue<int>                                   write_rsp_queue;
-+    int                                               max_pending_req;
++    std::deque<read_rsp_t>                            read_rsp_queue;
++    std::deque<write_rsp_t>                           write_rsp_queue;
++
++    int                                               max_pending_ar;
++    int                                               max_pending_aw;
++    int                                               ar_pending_count;
++    int                                               aw_pending_count;
 +    int                                               inflight_read_cnt;
 +
 +    //tlm utilities
@@ -353,6 +378,7 @@ index 0000000..925b420
 +              if (req.addr == payload.get_address() && req.len == payload.get_data_length())
 +              {
 +                find_out = 1;
++                read_req_list.erase(it);
 +                break;
 +              }
 +            }
@@ -362,81 +388,32 @@ index 0000000..925b420
 +            }
 +          }
 +
-+          // std::cout << sc_time_stamp() <<"  ---- Match Read Resp-----" << std::endl;
++          read_rsp_t rsp;
++          rsp.axi_id = req.axi_id;
++          rsp.offset = 0;
++          rsp.data.resize(payload.get_data_length());
++          memcpy(rsp.data.data(), payload.get_data_ptr(), payload.get_data_length());
++          read_rsp_queue.push_back(rsp);
 +
-+          std::queue<uint8_t>     rsp_out_order_queue;
-+          std::pair<req_t, std::queue<uint8_t>> pair;
-+
-+          unsigned char * data_ptr = (unsigned char*)malloc(payload.get_data_length());
-+          memcpy(data_ptr, payload.get_data_ptr(), payload.get_data_length());
-+
-+          for (int i = 0; i < req.len; ++i)
++          inflight_read_cnt--;
++          ar_pending_count--;
++          if (async_callback_instance && async_callback_response_meth)
 +          {
-+              rsp_out_order_queue.push(data_ptr[i]);
-+          }
-+          pair.first = req;
-+          pair.second = rsp_out_order_queue;
-+          out_order_rsp_list.push_back(pair);
-+
-+          free(data_ptr);
-+
-+          {
-+            std::list<req_t>::iterator req_it;
-+            std::list<std::pair<req_t, std::queue<uint8_t>>>::iterator rsp_it;
-+            while (true)
-+            {
-+                if (read_req_list.size() == 0)
-+                {
-+                    break;
-+                }
-+
-+                req_it = read_req_list.begin();
-+
-+                int matched = 0;
-+
-+                //sanity check if out of order is empty
-+                if (out_order_rsp_list.size() == 0)
-+                {
-+                    break;
-+                }
-+
-+                for (rsp_it = out_order_rsp_list.begin(); rsp_it != out_order_rsp_list.end(); ++rsp_it)
-+                {
-+                    if ( req_it->addr == rsp_it->first.addr && req_it->len == rsp_it->first.len )
-+                    {
-+                        matched = 1;
-+                        break;
-+                    }
-+                }
-+
-+                if (matched == 0)
-+                {
-+                    break;
-+                }
-+
-+                //push data and erase
-+                std::queue<uint8_t> oo_queue = rsp_it->second;
-+                for (uint32_t i = 0; i < req_it->len; ++i)
-+                {
-+                    uint8_t byte;
-+                    byte = oo_queue.front();
-+                    read_rsp_queue.push_back(byte);
-+                    oo_queue.pop();
-+                }
-+                read_req_list.erase(req_it);
-+                out_order_rsp_list.erase(rsp_it);
-+                inflight_read_cnt --;
-+                if (async_callback_instance && async_callback_response_meth)
-+                {
-+                    async_callback_response_meth(async_callback_instance, 0);
-+                }
-+            }
++              async_callback_response_meth(async_callback_instance, 0);
 +          }
 +        }
 +        if (payload.get_command() == tlm::TLM_WRITE_COMMAND)
 +        {
++            req_t req;
++            std::list<req_t>::iterator it = write_req_list.begin();
++            req = *it;
 +            write_req_list.pop_front();
-+            write_rsp_queue.push(1);
++
++            write_rsp_t rsp;
++            rsp.axi_id = req.axi_id;
++            write_rsp_queue.push_back(rsp);
++
++            aw_pending_count--;
 +            if (async_callback_instance && async_callback_response_meth)
 +            {
 +                async_callback_response_meth(async_callback_instance, 1);
@@ -462,10 +439,18 @@ index 0000000..925b420
 +    //public functions
 +    int dram_can_accept_req()
 +    {
-+        return (all_req_list.size() < max_pending_req);
++        return (all_req_list.size() < max_pending_ar); // Fallback
 +    }
 +
++    int dram_can_accept_ar() { return (ar_pending_count < max_pending_ar); }
++    int dram_can_accept_aw() { return (aw_pending_count < max_pending_aw); }
++
 +    void dram_send_req(uint64_t addr, uint64_t length , uint64_t is_write, uint64_t strob_enable, uint8_t * buf, uint8_t * strb_buf)
++    {
++        dram_send_req_id(addr, length, is_write, strob_enable, buf, strb_buf, 0);
++    }
++
++    void dram_send_req_id(uint64_t addr, uint64_t length, uint64_t is_write, uint64_t strob_enable, uint8_t * buf, uint8_t * strb_buf, int axi_id)
 +    {
 +        req_t req;
 +        tlm_generic_payload& payload = memoryManager.allocate(length);
@@ -473,6 +458,10 @@ index 0000000..925b420
 +        req.addr = addr;
 +        req.len  = length;
 +        req.is_write = is_write;
++        req.axi_id = axi_id;
++        
++        if (is_write) aw_pending_count++;
++        else ar_pending_count++;
 +        payload.acquire();
 +        payload.set_address(addr);
 +        payload.set_response_status(tlm::TLM_INCOMPLETE_RESPONSE);
@@ -523,7 +512,7 @@ index 0000000..925b420
 +
 +    int dram_has_read_rsp()
 +    {
-+        return read_rsp_queue.size();
++        return read_rsp_queue.size() ? read_rsp_queue.front().data.size() - read_rsp_queue.front().offset : 0;
 +    }
 +
 +    int dram_has_write_rsp()
@@ -538,48 +527,45 @@ index 0000000..925b420
 +
 +    int dram_get_write_rsp()
 +    {
-+        write_rsp_queue.pop();
++        write_rsp_queue.pop_front();
 +        return 1;
 +    }
 +
 +    void dram_get_read_rsp(uint64_t length, uint8_t* buf)
 +    {
-+        for (int i = 0; i < length; ++i)
-+        {
-+            if (read_rsp_queue.size())
-+            {
-+                buf[i] = read_rsp_queue.front();
-+                read_rsp_queue.pop_front();
-+            } else {
-+                buf[i] = 0;
-+            }
-+        }
++        // Legacy, ignore
 +    }
 +
 +    uint8_t dram_get_read_rsp_byte()
 +    {
-+        uint8_t byte;
-+        if (read_rsp_queue.size())
-+        {
-+            byte = read_rsp_queue.front();
-+            read_rsp_queue.pop_front();
-+        } else {
-+            byte = 0;
-+        }
-+        return byte;
++        return 0; // Legacy
 +    }
 +
 +    uint8_t dram_peek_read_rsp_byte(uint32_t index)
 +    {
-+        uint8_t byte;
-+        if (read_rsp_queue.size() > index)
-+        {
-+            byte = read_rsp_queue.at(index);
-+        } else {
-+            byte = 0;
-+        }
-+        return byte;
++        return dram_peek_read_rsp_byte_v2(index);
 +    }
++
++    int dram_has_read_rsp_v2() { return !read_rsp_queue.empty(); }
++    int dram_read_rsp_id() { return read_rsp_queue.empty() ? 0 : read_rsp_queue.front().axi_id; }
++    int dram_read_rsp_len() { return read_rsp_queue.empty() ? 0 : read_rsp_queue.front().data.size(); }
++    uint8_t dram_peek_read_rsp_byte_v2(int idx) {
++        if (read_rsp_queue.empty()) return 0;
++        auto& rsp = read_rsp_queue.front();
++        if (rsp.offset + idx < rsp.data.size()) return rsp.data[rsp.offset + idx];
++        return 0;
++    }
++    void dram_pop_read_rsp_v2(int bytes) {
++        if (!read_rsp_queue.empty()) {
++            read_rsp_queue.front().offset += bytes;
++            if (read_rsp_queue.front().offset >= read_rsp_queue.front().data.size()) {
++                read_rsp_queue.pop_front();
++            }
++        }
++    }
++    void dram_pop_read_rsp() { if(!read_rsp_queue.empty()) read_rsp_queue.pop_front(); }
++    int dram_write_rsp_id() { return write_rsp_queue.empty() ? 0 : write_rsp_queue.front().axi_id; }
++    void dram_pop_write_rsp() { if(!write_rsp_queue.empty()) write_rsp_queue.pop_front(); }
 +
 +    void registerCBInstance(CallbackInstance_t instance)
 +    {
@@ -598,7 +584,10 @@ index 0000000..925b420
 +
 +
 +    SC_CTOR(dramsys_conv):
-+    max_pending_req(2),
++    max_pending_ar(16),
++    max_pending_aw(16),
++    ar_pending_count(0),
++    aw_pending_count(0),
 +    inflight_read_cnt(0),
 +    memoryManager(true),
 +    iSocket("socket"),
@@ -613,10 +602,10 @@ index 0000000..925b420
 +};
 diff --git a/src/simulator/simulator/dramsys_lib.cpp b/src/simulator/simulator/dramsys_lib.cpp
 new file mode 100644
-index 0000000..6810a40
+index 0000000..f8c30ab
 --- /dev/null
 +++ b/src/simulator/simulator/dramsys_lib.cpp
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,382 @@
 +#include "Simulator.h"
 +
 +#include <DRAMSys/config/DRAMSysConfiguration.h>
@@ -918,6 +907,86 @@ index 0000000..6810a40
 +    list_of_conv[dram_id]->registerCBInstance(instance);
 +    list_of_conv[dram_id]->registerCBRespMeth(resp_meth);
 +    list_of_conv[dram_id]->registerCBUpdateReqMeth(req_meth);
++}
++
++// ==========================================
++// BULK DPI-C APIs (performance optimization)
++// bit[511:0] → uint32_t[16], bit[63:0] → uint32_t[2]
++// Bits are packed little-endian: byte 0 = bits[7:0], byte 1 = bits[15:8], etc.
++// ==========================================
++
++extern "C" void dram_write_buffer_bulk(int dram_id, const uint32_t* data,
++                                        const uint32_t* strb, int offset, int len) {
++    uint8_t* wbuf = list_of_wbuffer[dram_id];
++    uint8_t* wstrb_buf = list_of_wstrobe[dram_id];
++    const uint8_t* data_bytes = (const uint8_t*)data;
++    for (int i = 0; i < len; i++) {
++        wbuf[offset + i] = data_bytes[i];
++        // strb is packed bit vector: bit i is at strb[i/32] >> (i%32) & 1
++        int strb_bit = (strb[i / 32] >> (i % 32)) & 1;
++        wstrb_buf[offset + i] = strb_bit ? TLM_BYTE_ENABLED : TLM_BYTE_DISABLED;
++    }
++}
++
++extern "C" void dram_peek_read_rsp_bulk(int dram_id, uint32_t* data, int len) {
++    uint8_t* out = (uint8_t*)data;
++    auto& conv = *list_of_conv[dram_id];
++    if (conv.read_rsp_queue.empty()) {
++        memset(out, 0, len);
++        return;
++    }
++    auto& front = conv.read_rsp_queue.front();
++    for (int i = 0; i < len; i++) {
++        if (front.offset + i < front.data.size()) {
++            out[i] = front.data[front.offset + i];
++        } else {
++            out[i] = 0;
++        }
++    }
++}
++
++extern "C" void dram_send_req_id(int dram_id, int axi_id, uint64_t addr, uint64_t length, uint64_t is_write, uint64_t strob_enable) {
++    list_of_conv[dram_id]->dram_send_req_id(addr, length, is_write, strob_enable, list_of_wbuffer[dram_id], list_of_wstrobe[dram_id], axi_id);
++}
++
++extern "C" int dram_can_accept_ar(int dram_id) {
++    return list_of_conv[dram_id]->dram_can_accept_ar();
++}
++
++extern "C" int dram_can_accept_aw(int dram_id) {
++    return list_of_conv[dram_id]->dram_can_accept_aw();
++}
++
++extern "C" int dram_has_read_rsp_v2(int dram_id) {
++    return list_of_conv[dram_id]->dram_has_read_rsp_v2();
++}
++
++extern "C" int dram_read_rsp_id(int dram_id) {
++    return list_of_conv[dram_id]->dram_read_rsp_id();
++}
++
++extern "C" int dram_read_rsp_len(int dram_id) {
++    return list_of_conv[dram_id]->dram_read_rsp_len();
++}
++
++extern "C" int dram_peek_read_rsp_byte_v2(int dram_id, int idx) {
++    return (int)list_of_conv[dram_id]->dram_peek_read_rsp_byte_v2(idx);
++}
++
++extern "C" void dram_pop_read_rsp_v2(int dram_id, int bytes) {
++    list_of_conv[dram_id]->dram_pop_read_rsp_v2(bytes);
++}
++
++extern "C" void dram_pop_read_rsp(int dram_id) {
++    list_of_conv[dram_id]->dram_pop_read_rsp();
++}
++
++extern "C" int dram_write_rsp_id(int dram_id) {
++    return list_of_conv[dram_id]->dram_write_rsp_id();
++}
++
++extern "C" void dram_pop_write_rsp(int dram_id) {
++    list_of_conv[dram_id]->dram_pop_write_rsp();
 +}
 diff --git a/src/simulator/simulator/elfloader.cpp b/src/simulator/simulator/elfloader.cpp
 new file mode 100644

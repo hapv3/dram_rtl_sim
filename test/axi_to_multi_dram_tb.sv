@@ -11,7 +11,14 @@
 
 // Testbench for dram rtl simulator
 
+`ifdef VERILATOR
+module axi_to_multi_dram_tb (
+    input logic clk,
+    input logic rst_n
+);
+`else
 module axi_to_multi_dram_tb;
+`endif
 
     `include "axi/assign.svh"
     `include "axi/typedef.svh"
@@ -43,7 +50,9 @@ module axi_to_multi_dram_tb;
     localparam time ApplTime =  1ns;
     localparam time TestTime =  3ns;
 
+`ifndef VERILATOR
     logic  clk, rst_n;
+`endif
 
     axi_req_t                   axi_req, axi_req_2;
     axi_resp_t                  axi_resp, axi_resp_2;
@@ -69,6 +78,7 @@ module axi_to_multi_dram_tb;
     `AXI_ASSIGN_FROM_RESP(axi_bus_dv_2, axi_resp_2)
 
 
+`ifndef VERILATOR
     //////////////////////////////////////
     //        Clock Generation          //
     //////////////////////////////////////
@@ -86,6 +96,7 @@ module axi_to_multi_dram_tb;
             #(ClkPeriod/2) clk = 1;
         end
     end
+`endif
 
     //////////////////////
     //        DUT       //
